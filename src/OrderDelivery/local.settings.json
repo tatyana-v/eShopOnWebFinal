@@ -1,0 +1,10 @@
+{
+    "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=storagefinaltask;AccountKey=Y7sWCTC0JE47djwJVwiK89GW/KWymEkT0wS9cLMnzZ8aaROr8sA6vdKbKqAJV4yDSMLrjwUJ3N8x+ASteI7JHg==;EndpointSuffix=core.windows.net",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "CosmosDbConnectionString": "AccountEndpoint=https://eshop-cosmos.documents.azure.com:443/;AccountKey=mBW71r2M7AjJypZrwWwaBPivZKjG5iGaoyxI3Ovnl6soNSVThou0uKmaoM8J4Dvx6uDJj8PpSBYUACDbuA2SeA==;",
+    "CosmosDbDatabaseId": "OrdersDb",
+    "CosmosDbcontainerId": "Orders"
+  }
+}

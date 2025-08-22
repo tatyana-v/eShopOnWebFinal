@@ -1,0 +1,9 @@
+{
+    "IsEncrypted": false,
+  "Values": {
+    //"AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=durfuncstorageacc;AccountKey=hBi+aO6UQiftDAA9Nt03H2pGg8IUtRkPE+AcxMfmam51bI5QQWN2d6ehof1Lh+GiZ2SaMqbQjW47+AStAiWNHg==;EndpointSuffix=core.windows.net",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "OrderBlobContainer": "durfunc-blob"
+  }
+}

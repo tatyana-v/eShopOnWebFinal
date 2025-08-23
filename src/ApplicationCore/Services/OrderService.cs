@@ -70,7 +70,7 @@ public class OrderService : IOrderService
         
         await _mediator.Publish(orderCreatedEvent);
 
-        /*var orderData = new
+        var orderData = new
         {
             OrderId = order.Id,
             Items = order.OrderItems.Select(item => new
@@ -78,7 +78,7 @@ public class OrderService : IOrderService
                 ItemId = item.Id,
                 Quantity = item.Units
             })
-        };**/
+        };
 
         var deliveryData = new
         {
@@ -101,7 +101,7 @@ public class OrderService : IOrderService
             }
         };
 
-        //var jsonContent = new StringContent(JsonSerializer.Serialize(deliveryData), Encoding.UTF8, "application/json");
+        var jsonContent = new StringContent(JsonSerializer.Serialize(deliveryData), Encoding.UTF8, "application/json");
 
         var json = JsonSerializer.Serialize(deliveryData);
 
@@ -115,13 +115,13 @@ public class OrderService : IOrderService
             CorrelationId = order.Id.ToString()
         };
 
-        //await sbSender.SendMessageAsync(msg);
+        await sbSender.SendMessageAsync(msg);
 
         //var client = _httpClientFactory.CreateClient("OrderItemsReserver");
 
-        //var client = _httpClientFactory.CreateClient("OrderDelivery");
+        var client = _httpClientFactory.CreateClient("OrderDelivery");
 
-        //var response = await client.PostAsync("", jsonContent);
+        var response = await client.PostAsync("", jsonContent);
 
     }
 }

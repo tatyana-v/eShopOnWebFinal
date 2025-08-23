@@ -6,6 +6,7 @@ using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Azure.Cosmos;
 using System.Net;
+using Grpc.Core;
 
 namespace OrderDelivery
 {
@@ -58,18 +59,36 @@ namespace OrderDelivery
             string databaseId = Environment.GetEnvironmentVariable("CosmosDbDatabaseId");
             string containerId = Environment.GetEnvironmentVariable("CosmosDbcontainerId");
 
+            var delaySetting = Environment.GetEnvironmentVariable("OrderSaveDelaySeconds");
+
+            
+
             using var cosmosClient = new CosmosClient(connectionString);
             var container = cosmosClient.GetContainer(databaseId, containerId);
 
-            var response = await container.CreateItemAsync(order, new PartitionKey(order.OrderId));
-            logger.LogInformation($"Order {order.OrderId} saved to CosmosDB. Status: {response.StatusCode}");
+            try
+            {
+                if (int.TryParse(delaySetting, out var delaySeconds) && delaySeconds > 0)
+                {
+                    logger.LogInformation($"Set delay for {delaySeconds} seconds.");
+                    await Task.Delay(delaySeconds*1000);
+                }
+                var response = await container.CreateItemAsync(order, new PartitionKey(order.OrderId));
+                logger.LogInformation($"Order {order.OrderId} saved to CosmosDB. Status: {response.StatusCode}");
+                return $"Order {order.OrderId} saved.";
+            }
+            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
+            {
+                var msg = $"Order {order.OrderId} already exists in CosmosDB";
+                logger.LogInformation(msg);
+                return msg;
+            }
 
-            return $"Order {order.OrderId} saved.";
         }
 
         [Function("HttpStart")]
         public static async Task<HttpResponseData> HttpStart(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequestData req,
+            [HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequestData req,
             [DurableClient] DurableTaskClient client,
             FunctionContext executionContext)
         {
@@ -80,12 +99,105 @@ namespace OrderDelivery
             var orderData = JsonSerializer.Deserialize<OrderData>(requestBody);
 
             // Pass order data to orchestrator
-            string instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
-                nameof(Function1), orderData);
+            //string instanceId = await client.ScheduleNewOrchestrationInstanceAsync(
+            //    nameof(Function1), orderData);
 
-            logger.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
+            string instanceId = orderData.OrderId.ToString();
 
-            return await client.CreateCheckStatusResponseAsync(req, instanceId);
+            var meta = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
+
+            var waitSetting = Environment.GetEnvironmentVariable("OrderStatusMaxWaitSeconds");
+
+            int.TryParse(waitSetting, out int waitSeconds);
+            if(waitSeconds < 0) waitSeconds = 0;
+
+            async Task<OrchestrationMetadata?> WaitForCompletion(string id, int maxWaitSeconds)
+            {
+                if (maxWaitSeconds <= 0)
+                {
+                    return await client.GetInstanceAsync(id);
+                }
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(maxWaitSeconds));
+
+                try
+                {
+                    return await client.WaitForInstanceCompletionAsync(id, cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return await client.GetInstanceAsync(id);
+                }
+            }
+
+            if (meta == null)
+            {
+                var options = new StartOrchestrationOptions(instanceId);
+                await client.ScheduleNewOrchestrationInstanceAsync(nameof(Function1), orderData, options);
+
+                logger.LogInformation("Started new orchestration '{InstanceId}' for orderId {OrderId}.", instanceId, orderData.OrderId);
+
+                return await client.CreateCheckStatusResponseAsync(req, instanceId);
+            }
+
+            switch (meta.RuntimeStatus)
+            {
+                case OrchestrationRuntimeStatus.Completed:
+                    {
+                        logger.LogInformation("Order {.OrderId} already processed (instance {InstanceId}). No new record created.", orderData.OrderId, instanceId);
+                        var ok = req.CreateResponse(HttpStatusCode.OK);
+                        await ok.WriteStringAsync($"Order {orderData.OrderId} already added. No new record created.");
+                        return ok;
+                    }
+                case OrchestrationRuntimeStatus.Running:
+                case OrchestrationRuntimeStatus.Pending:
+                    {
+                        logger.LogInformation("Order {OrderId} is being processed (status {Status}). Waiting for completion...", orderData.OrderId, meta.RuntimeStatus);
+                        var final = await WaitForCompletion(instanceId,waitSeconds);
+                        if (final?.RuntimeStatus != OrchestrationRuntimeStatus.Completed)
+                        {
+                            var ok = req.CreateResponse(HttpStatusCode.OK);
+                            await ok.WriteStringAsync($"Order {orderData.OrderId} processed while waiting.");
+                            return ok;
+                        }
+
+                        logger.LogInformation("Order {OrderId} still processing. Returning status URL.", orderData.OrderId);
+                        return await client.CreateCheckStatusResponseAsync(req, instanceId);
+                    }
+
+                case OrchestrationRuntimeStatus.Failed:
+                case OrchestrationRuntimeStatus.Terminated:
+                    {
+                        logger.LogWarning("Order {OrderID} previously failed (status {Status}). Trying once again...", orderData.OrderId, meta.RuntimeStatus);
+
+                        await client.PurgeInstanceAsync(instanceId);
+
+                        var options = new StartOrchestrationOptions(instanceId);
+                        await client.ScheduleNewOrchestrationInstanceAsync(nameof(Function1), orderData, options);
+
+                        var afterRetry = await WaitForCompletion(instanceId, waitSeconds);
+
+                        if (afterRetry?.RuntimeStatus == OrchestrationRuntimeStatus.Completed)
+                        {
+                            logger.LogInformation($"Retry for order {orderData.OrderId} succeeded.");
+                            var ok = req.CreateResponse(HttpStatusCode.OK);
+                            await ok.WriteStringAsync($"Order {orderData.OrderId} saved on retry.");
+                            return ok;
+                        }
+
+                        logger.LogError($"Retry for order {orderData.OrderId} did not succeed.");
+                        var err = req.CreateResponse(HttpStatusCode.InternalServerError);
+                        await err.WriteStringAsync($"Order {orderData.OrderId} could not be saved. Retry failed.");
+                        return err;
+
+                    }
+                default:
+                    {
+                        var resp = req.CreateResponse(HttpStatusCode.Accepted);
+                        await resp.WriteStringAsync($"Order {orderData.OrderId}: current status = {meta.RuntimeStatus}.");
+                        return resp;
+                    }
+            }
         }
     }
 }

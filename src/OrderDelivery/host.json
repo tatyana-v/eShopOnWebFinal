@@ -1,12 +1,18 @@
 {
-    "version": "2.0",
-    "logging": {
-        "applicationInsights": {
-            "samplingSettings": {
-                "isEnabled": true,
-                "excludedTypes": "Request"
-            },
-            "enableLiveMetricsFilters": true
-        }
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "LogLevel": {
+        "Default": "Information"
+      },
+      "samplingSettings": {
+        "isEnabled": false
+        //"excludedTypes": "Request"
+      },
+      "enableLiveMetricsFilters": true
+    },
+    "LogLevel": {
+      "Default": "Information"
     }
+  }
 }

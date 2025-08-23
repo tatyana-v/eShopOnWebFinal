@@ -5,6 +5,9 @@
     "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
     "CosmosDbConnectionString": "AccountEndpoint=https://eshop-cosmos.documents.azure.com:443/;AccountKey=mBW71r2M7AjJypZrwWwaBPivZKjG5iGaoyxI3Ovnl6soNSVThou0uKmaoM8J4Dvx6uDJj8PpSBYUACDbuA2SeA==;",
     "CosmosDbDatabaseId": "OrdersDb",
-    "CosmosDbcontainerId": "Orders"
+    "CosmosDbcontainerId": "Orders",
+
+    "OrderSaveDelaySeconds": "30",
+    "OrderStatusMaxWaitSeconds": "15"
   }
 }

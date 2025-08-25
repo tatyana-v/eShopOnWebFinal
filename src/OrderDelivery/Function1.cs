@@ -107,18 +107,39 @@ namespace OrderDelivery
             var meta = await client.GetInstanceAsync(instanceId, getInputsAndOutputs: false);
 
             var waitSetting = Environment.GetEnvironmentVariable("OrderStatusMaxWaitSeconds");
+            var intervalSetting = Environment.GetEnvironmentVariable("OrderStatusIntervalSeconds");
 
             int.TryParse(waitSetting, out int waitSeconds);
             if(waitSeconds < 0) waitSeconds = 0;
+            int.TryParse(intervalSetting, out int intervalSeconds);
+            if (intervalSeconds < 1) intervalSeconds = 1;
 
-            async Task<OrchestrationMetadata?> WaitForCompletion(string id, int maxWaitSeconds)
+            async Task<OrchestrationMetadata?> WaitForCompletion(string id, int maxWaitSeconds, int checkIntervalSeconds)
             {
                 if (maxWaitSeconds <= 0)
                 {
                     return await client.GetInstanceAsync(id);
                 }
 
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(maxWaitSeconds));
+                var deadline = DateTime.UtcNow.AddSeconds(maxWaitSeconds);
+                OrchestrationMetadata? meta = null;
+                
+                while (DateTime.UtcNow < deadline)
+                {
+                    meta = await client.GetInstanceAsync(id, getInputsAndOutputs: false);
+                    if (meta is null) return null;
+
+                    if (meta.RuntimeStatus is not (OrchestrationRuntimeStatus.Pending or OrchestrationRuntimeStatus.Running))
+                    {
+                        return meta;
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(checkIntervalSeconds));
+                }
+
+                return meta ?? await client.GetInstanceAsync(id, getInputsAndOutputs: false);
+
+                /**using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(maxWaitSeconds));
 
                 try
                 {
@@ -127,7 +148,7 @@ namespace OrderDelivery
                 catch (OperationCanceledException)
                 {
                     return await client.GetInstanceAsync(id);
-                }
+                }**/
             }
 
             if (meta == null)
@@ -153,8 +174,8 @@ namespace OrderDelivery
                 case OrchestrationRuntimeStatus.Pending:
                     {
                         logger.LogInformation("Order {OrderId} is being processed (status {Status}). Waiting for completion...", orderData.OrderId, meta.RuntimeStatus);
-                        var final = await WaitForCompletion(instanceId,waitSeconds);
-                        if (final?.RuntimeStatus != OrchestrationRuntimeStatus.Completed)
+                        var final = await WaitForCompletion(instanceId,waitSeconds, intervalSeconds);
+                        if (final?.RuntimeStatus is OrchestrationRuntimeStatus.Completed)
                         {
                             var ok = req.CreateResponse(HttpStatusCode.OK);
                             await ok.WriteStringAsync($"Order {orderData.OrderId} processed while waiting.");
@@ -175,7 +196,7 @@ namespace OrderDelivery
                         var options = new StartOrchestrationOptions(instanceId);
                         await client.ScheduleNewOrchestrationInstanceAsync(nameof(Function1), orderData, options);
 
-                        var afterRetry = await WaitForCompletion(instanceId, waitSeconds);
+                        var afterRetry = await WaitForCompletion(instanceId, waitSeconds, intervalSeconds);
 
                         if (afterRetry?.RuntimeStatus == OrchestrationRuntimeStatus.Completed)
                         {

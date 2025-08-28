@@ -8,12 +8,4 @@ var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.ConfigureFunctionsWebApplication();
 
-builder.Services
-    .AddApplicationInsightsTelemetryWorkerService()
-    .ConfigureFunctionsApplicationInsights();
-
-//builder.Logging.ClearProviders();
-//builder.Logging.AddApplicationInsights();
-builder.Logging.SetMinimumLevel(LogLevel.Information);
-
 builder.Build().Run();

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
+using Microsoft.ApplicationInsights;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -15,10 +16,12 @@ public class ReserveOrderFunction
     private readonly HttpClient _http;
     private readonly ILogger<ReserveOrderFunction> _logger;
     private readonly string _logicAppUrl;
+    private readonly TelemetryClient _tc;
 
-    public ReserveOrderFunction(IConfiguration cfg, ILogger<ReserveOrderFunction> logger)
+    public ReserveOrderFunction(IConfiguration cfg, ILogger<ReserveOrderFunction> logger, TelemetryClient tc)
     {
         _logger = logger;
+        _tc = tc;
         _http = new HttpClient();
 
         var blobConn = cfg["BlobConnection"];
@@ -27,6 +30,9 @@ public class ReserveOrderFunction
         //_container.CreateIfNotExists();
 
         _logicAppUrl = cfg["LogicAppUrl"] ?? "";
+        
+        // Log function initialization
+        _logger.LogInformation("ReserveOrderFunction initialized with container: {ContainerName}", containerName);
     }
 
     [Function(nameof(ReserveOrderFunction))]
@@ -34,19 +40,32 @@ public class ReserveOrderFunction
         [ServiceBusTrigger("order-items-reserver", Connection = "ServiceBusConnection")]
         ServiceBusReceivedMessage message)
     {
-        _logger.LogInformation("Message ID: {id}", message.MessageId);
-        _logger.LogInformation("Message Body: {body}", message.Body);
-        _logger.LogInformation("Message Content-Type: {contentType}", message.ContentType);
+        var functionStartTime = DateTime.UtcNow;
+        _logger.LogInformation("Function execution started at {StartTime}", functionStartTime);
+        
+        _logger.LogInformation("Message ID: {MessageId}", message.MessageId);
+        _logger.LogInformation("Message Body: {MessageBody}", message.Body);
+        _logger.LogInformation("Message Content-Type: {ContentType}", message.ContentType);
+        
+        // Track custom telemetry
+        _tc.TrackTrace("TelemetryClient test at " + DateTime.UtcNow);
+        _tc.TrackEvent("OrderProcessingStarted", new Dictionary<string, string>
+        {
+            ["MessageId"] = message.MessageId,
+            ["ContentType"] = message.ContentType ?? "unknown"
+        });
 
         int orderId = 0;
         try
         {
             using var doc = JsonDocument.Parse(message.Body);
             orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
+            _logger.LogInformation("Successfully parsed OrderId: {OrderId}", orderId);
         }
-        catch
+        catch (Exception parseEx)
         {
             orderId = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _logger.LogWarning(parseEx, "Failed to parse OrderId from message, using timestamp: {OrderId}", orderId);
         }
 
         var blobName = $"{orderId}.json";
@@ -55,7 +74,7 @@ public class ReserveOrderFunction
         var retry = Policy
             .Handle<Exception>()
             .WaitAndRetryAsync(3, i => TimeSpan.FromSeconds(Math.Pow(2, i)),
-                (ex, ts, i, _) => _logger.LogWarning(ex, "Retry {Try} uploading blob {Blob}", i, blobName));
+                (ex, ts, i, _) => _logger.LogWarning(ex, "Retry {Try} uploading blob {BlobName}", i, blobName));
 
         try
         {
@@ -65,13 +84,17 @@ public class ReserveOrderFunction
                 await blob.UploadAsync(ms, overwrite: true);
             });
 
-            _logger.LogInformation("Order {OrderId} stored as blob {BlobName}.", orderId, blobName);
+            _logger.LogInformation("Order {OrderId} stored as blob {BlobName}", orderId, blobName);
+            _tc.TrackEvent("OrderStoredSuccessfully", new Dictionary<string, string>
+            {
+                ["OrderId"] = orderId.ToString(),
+                ["BlobName"] = blobName
+            });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to upload blob for Order {OrderId}. Fallback to Logic App.", orderId);
-
-
+            _logger.LogError(ex, "Failed to upload blob for Order {OrderId}. Fallback to Logic App", orderId);
+            _tc.TrackException(ex);
 
             if (!string.IsNullOrWhiteSpace(_logicAppUrl))
             {
@@ -88,16 +111,21 @@ public class ReserveOrderFunction
 
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _logger.LogWarning("Logic App returned non-success status: {Status} {Reason}",
+                    _logger.LogWarning("Logic App returned non-success status: {StatusCode} {ReasonPhrase}",
                         (int)resp.StatusCode, resp.ReasonPhrase);
                 }
                 else
                 {
-                    _logger.LogInformation("Logic App successfully processed Order {OrderId} fallback.", orderId);
+                    _logger.LogInformation("Logic App successfully processed Order {OrderId} fallback", orderId);
                 }
             }
             throw;
         }
-
+        finally
+        {
+            var executionTime = DateTime.UtcNow - functionStartTime;
+            _logger.LogInformation("Function execution completed in {ExecutionTime}ms", executionTime.TotalMilliseconds);
+            _tc.TrackMetric("FunctionExecutionTime", executionTime.TotalMilliseconds);
+        }
     }
 }
